@@ -94,10 +94,63 @@
     <!-- Preview + Crop Controls -->
     <div class="preview-area" id="previewArea">
       <div class="preview-wrapper">
-        <div class="preview-canvas-wrapper">
+        <div class="preview-canvas-wrapper" id="canvasWrapper">
           <canvas id="previewCanvas"></canvas>
-          <div class="preview-circle-overlay" id="circleOverlay"></div>
+          <!-- 圓形裁切互動 overlay（SVG） -->
+          <svg id="cropSvg" xmlns="http://www.w3.org/2000/svg"
+               style="position:absolute;inset:0;width:100%;height:100%;overflow:visible;display:none;">
+            <defs>
+              <mask id="circleMask">
+                <rect width="100%" height="100%" fill="white"/>
+                <circle id="maskCircle" fill="black"/>
+              </mask>
+            </defs>
+            <!-- 暗色遮罩（圓形外） -->
+            <rect id="dimRect" width="100%" height="100%"
+                  fill="rgba(0,0,0,0.62)" mask="url(#circleMask)"/>
+            <!-- 圓形外框 -->
+            <circle id="cropCircleRing"
+                    fill="none" stroke="#00e5c8" stroke-width="2"
+                    stroke-dasharray="6 3"/>
+            <!-- 拖曳把手（圓形中央） -->
+            <circle id="dragHandle"
+                    r="18" fill="rgba(0,229,200,0.15)"
+                    stroke="#00e5c8" stroke-width="1.5"
+                    style="cursor:move"/>
+            <!-- 縮放把手（右側中央） -->
+            <circle id="resizeHandle"
+                    r="8" fill="#00e5c8" stroke="#fff" stroke-width="2"
+                    style="cursor:ew-resize"/>
+            <!-- 尺寸標籤 -->
+            <text id="sizeLabel"
+                  fill="#00e5c8" font-size="12" font-family="Syne,sans-serif"
+                  font-weight="600" text-anchor="middle"
+                  style="pointer-events:none;user-select:none"/>
+          </svg>
         </div>
+
+        <!-- 圓形大小滑桿（勾選裁切圓形時才顯示） -->
+        <div class="circle-size-control" id="circleSizeControl" style="display:none">
+          <div class="size-control-row">
+            <span class="size-label">
+              <svg viewBox="0 0 20 20" fill="none" width="16" height="16">
+                <circle cx="10" cy="10" r="8" stroke="currentColor" stroke-width="1.8"/>
+                <line x1="2" y1="10" x2="18" y2="10" stroke="var(--accent)" stroke-width="1.4" stroke-dasharray="2 2"/>
+              </svg>
+              圓形大小
+            </span>
+            <span class="size-value-badge" id="sizeValueBadge">58 mm</span>
+          </div>
+          <div class="slider-track-wrap">
+            <span class="slider-endpoint">42mm</span>
+            <input type="range" id="circleSizeSlider"
+                   min="42" max="72" value="58" step="1"
+                   class="circle-slider" aria-label="圓形裁切直徑"/>
+            <span class="slider-endpoint">72mm</span>
+          </div>
+          <p class="size-hint">也可直接在預覽圖上拖動圓框移動位置，或拖動右側把手調整大小</p>
+        </div>
+
         <div class="preview-info" id="previewInfo"></div>
       </div>
     </div>
