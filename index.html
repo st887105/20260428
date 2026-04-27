@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>圓形裁切 & 浮水印去除工具</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;800&family=Noto+Sans+TC:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<div class="bg-grid"></div>
+
+<header>
+  <div class="logo">
+    <span class="logo-icon">◎</span>
+    <span class="logo-text">CircleCrop</span>
+  </div>
+  <p class="tagline">圓形裁切 · Gemini 浮水印去除</p>
+</header>
+
+<main>
+
+  <!-- Step 1: Upload -->
+  <section class="step" id="step-upload">
+    <div class="step-label">01</div>
+    <div
+      class="drop-zone"
+      id="dropZone"
+      tabindex="0"
+      role="button"
+      aria-label="點擊或拖曳上傳圖片"
+    >
+      <div class="drop-inner">
+        <div class="drop-icon">
+          <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M24 8v24M14 18l10-10 10 10" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M8 36h32" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <p class="drop-title">拖曳圖片至此，或點擊選擇</p>
+        <p class="drop-sub">支援 JPG、PNG、WebP · 最大 10MB</p>
+      </div>
+      <input type="file" id="fileInput" accept="image/*" hidden />
+    </div>
+  </section>
+
+  <!-- Step 2: Options (hidden until image loaded) -->
+  <section class="step hidden" id="step-options">
+    <div class="step-label">02</div>
+    <h2 class="step-title">選擇處理選項</h2>
+
+    <div class="options-grid">
+
+      <label class="option-card" id="card-watermark">
+        <input type="checkbox" id="opt-watermark" />
+        <div class="option-icon">
+          <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="6" y="6" width="36" height="36" rx="4" stroke="currentColor" stroke-width="2.5"/>
+            <path d="M6 34l10-10 8 8 8-12 10 14" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M30 34h12v-8" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M34 38l8-8" stroke="var(--accent)" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <div class="option-content">
+          <span class="option-name">去除 Gemini 浮水印</span>
+          <span class="option-desc">修復圖片右下角 AI 生圖浮水印區域</span>
+        </div>
+        <div class="option-check">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+      </label>
+
+      <label class="option-card" id="card-circle">
+        <input type="checkbox" id="opt-circle" checked />
+        <div class="option-icon">
+          <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="24" cy="24" r="16" stroke="currentColor" stroke-width="2.5"/>
+            <path d="M8 8l32 32M8 40L40 8" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="3 3"/>
+          </svg>
+        </div>
+        <div class="option-content">
+          <span class="option-name">裁切成圓形</span>
+          <span class="option-desc">輸出透明背景 PNG 圓形圖片，適合頭像</span>
+        </div>
+        <div class="option-check">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+      </label>
+
+    </div>
+
+    <!-- Preview + Crop Controls -->
+    <div class="preview-area" id="previewArea">
+      <div class="preview-wrapper">
+        <div class="preview-canvas-wrapper">
+          <canvas id="previewCanvas"></canvas>
+          <div class="preview-circle-overlay" id="circleOverlay"></div>
+        </div>
+        <div class="preview-info" id="previewInfo"></div>
+      </div>
+    </div>
+
+    <!-- Process Button -->
+    <div class="action-area">
+      <button class="btn-process" id="btnProcess">
+        <span class="btn-text">開始處理</span>
+        <span class="btn-icon">→</span>
+      </button>
+    </div>
+  </section>
+
+  <!-- Step 3: Result (hidden until processed) -->
+  <section class="step hidden" id="step-result">
+    <div class="step-label">03</div>
+    <h2 class="step-title">處理完成</h2>
+
+    <div class="result-area">
+      <div class="result-preview">
+        <img id="resultImg" alt="處理結果" />
+      </div>
+      <div class="result-actions">
+        <button class="btn-download" id="btnDownload">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M12 4v12M8 12l4 4 4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 20h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          下載圖片
+        </button>
+        <button class="btn-reset" id="btnReset">重新上傳</button>
+      </div>
+    </div>
+
+    <div class="status-log" id="statusLog"></div>
+  </section>
+
+  <!-- Loading overlay -->
+  <div class="loading-overlay hidden" id="loadingOverlay">
+    <div class="loading-inner">
+      <div class="spinner"></div>
+      <p class="loading-text" id="loadingText">處理中，請稍候…</p>
+    </div>
+  </div>
+
+</main>
+
+<footer>
+  <p>純前端處理，圖片不會上傳伺服器 · <a href="https://github.com/" target="_blank">GitHub</a></p>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
