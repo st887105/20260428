@@ -1,43 +1,72 @@
 /**
- * CircleCrop Tool
+ * CircleCrop Tool — app.js
  * 功能：
- *  1. 去除 Gemini AI 圖片右下角浮水印（Canvas inpainting）
- *  2. 裁切成圓形（輸出透明背景 PNG）
- *
- * 架構：
- *  - 純前端 Canvas 處理（無需 GAS，圖片不離開瀏覽器）
- *  - 若需 GAS 後端：設定 GAS_URL 並切換 processWithGAS()
+ *  1. 去除 Gemini AI 右下角浮水印（Canvas inpainting）
+ *  2. 裁切成圓形，支援：
+ *     - 滑桿調整直徑（42–72 mm，預設 58 mm）
+ *     - 拖動圓框移動位置
+ *     - 拖動右側把手縮放大小
  */
 
-// ── 設定 GAS 後端 URL（若使用後端處理時填入）──
-const GAS_URL = ''; // e.g. 'https://script.google.com/macros/s/YOUR_ID/exec'
+// ── GAS 後端 URL（選填）──
+const GAS_URL = '';
 
-// ── DOM refs ──
-const dropZone    = document.getElementById('dropZone');
-const fileInput   = document.getElementById('fileInput');
-const stepOptions = document.getElementById('step-options');
-const stepResult  = document.getElementById('step-result');
-const previewCanvas = document.getElementById('previewCanvas');
-const circleOverlay = document.getElementById('circleOverlay');
-const previewInfo   = document.getElementById('previewInfo');
-const optWatermark  = document.getElementById('opt-watermark');
-const optCircle     = document.getElementById('opt-circle');
-const btnProcess    = document.getElementById('btnProcess');
-const btnDownload   = document.getElementById('btnDownload');
-const btnReset      = document.getElementById('btnReset');
-const resultImg     = document.getElementById('resultImg');
-const statusLog     = document.getElementById('statusLog');
-const loadingOverlay = document.getElementById('loadingOverlay');
-const loadingText    = document.getElementById('loadingText');
+// ─────────────────────────────────────────
+//  DOM refs
+// ─────────────────────────────────────────
+const dropZone        = document.getElementById('dropZone');
+const fileInput       = document.getElementById('fileInput');
+const stepOptions     = document.getElementById('step-options');
+const stepResult      = document.getElementById('step-result');
+const previewCanvas   = document.getElementById('previewCanvas');
+const canvasWrapper   = document.getElementById('canvasWrapper');
+const cropSvg         = document.getElementById('cropSvg');
+const maskCircle      = document.getElementById('maskCircle');
+const cropCircleRing  = document.getElementById('cropCircleRing');
+const dragHandle      = document.getElementById('dragHandle');
+const resizeHandle    = document.getElementById('resizeHandle');
+const sizeLabel       = document.getElementById('sizeLabel');
+const circleSizeControl = document.getElementById('circleSizeControl');
+const circleSizeSlider  = document.getElementById('circleSizeSlider');
+const sizeValueBadge    = document.getElementById('sizeValueBadge');
+const previewInfo     = document.getElementById('previewInfo');
+const optWatermark    = document.getElementById('opt-watermark');
+const optCircle       = document.getElementById('opt-circle');
+const btnProcess      = document.getElementById('btnProcess');
+const btnDownload     = document.getElementById('btnDownload');
+const btnReset        = document.getElementById('btnReset');
+const resultImg       = document.getElementById('resultImg');
+const statusLog       = document.getElementById('statusLog');
+const loadingOverlay  = document.getElementById('loadingOverlay');
+const loadingText     = document.getElementById('loadingText');
 
-let originalFile = null;
-let originalImage = null; // HTMLImageElement
+// ─────────────────────────────────────────
+//  State
+// ─────────────────────────────────────────
+let originalFile  = null;
+let originalImage = null;
 let resultDataURL = '';
 
-// ── Drag & Drop ──
-dropZone.addEventListener('click', () => fileInput.click());
-dropZone.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') fileInput.click(); });
+// 圓形裁切狀態（以 canvas 像素為單位）
+const cropState = {
+  cx: 0,      // 圓心 X（canvas px）
+  cy: 0,      // 圓心 Y（canvas px）
+  r:  0,      // 半徑（canvas px）
+  mmPerPx: 1, // mm ÷ canvas px 比例（依圖片解析度計算）
+};
 
+// mm 邊界（對應 slider）
+const MM_MIN = 42;
+const MM_MAX = 72;
+const MM_DEFAULT = 58;
+
+// ─────────────────────────────────────────
+//  Drag & Drop 上傳
+// ─────────────────────────────────────────
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('keydown', e => {
+  if (e.key === 'Enter' || e.key === ' ') fileInput.click();
+});
 dropZone.addEventListener('dragover', e => {
   e.preventDefault();
   dropZone.classList.add('drag-over');
@@ -50,12 +79,13 @@ dropZone.addEventListener('drop', e => {
   if (f && f.type.startsWith('image/')) loadImage(f);
   else showError('請上傳圖片檔案（JPG / PNG / WebP）');
 });
-
 fileInput.addEventListener('change', () => {
   if (fileInput.files[0]) loadImage(fileInput.files[0]);
 });
 
-// ── Load image ──
+// ─────────────────────────────────────────
+//  載入圖片
+// ─────────────────────────────────────────
 function loadImage(file) {
   if (file.size > 10 * 1024 * 1024) {
     showError('圖片大小超過 10MB，請壓縮後再試。');
@@ -76,7 +106,9 @@ function loadImage(file) {
   reader.readAsDataURL(file);
 }
 
-// ── Preview on canvas ──
+// ─────────────────────────────────────────
+//  繪製預覽 canvas
+// ─────────────────────────────────────────
 function drawPreview(img) {
   const MAX = 560;
   let w = img.naturalWidth;
@@ -90,17 +122,248 @@ function drawPreview(img) {
   ctx.clearRect(0, 0, w, h);
   ctx.drawImage(img, 0, 0, w, h);
 
-  // Mark watermark region
-  if (optWatermark.checked) {
-    drawWatermarkMarker(ctx, w, h);
-  }
+  if (optWatermark.checked) drawWatermarkMarker(ctx, w, h);
 
-  updateCircleOverlay();
+  // 計算 mm → canvas px 比例
+  // 假設螢幕 96dpi、1inch=25.4mm → 1px=0.2646mm
+  // 但使用者說的 mm 是輸出尺寸（印刷），以原始圖片尺寸對應
+  // 此處直接以預覽 canvas 的比例呈現，實際輸出再等比換算
+  const scaleFactor = w / img.naturalWidth; // preview 縮放比
+  cropState.mmPerPx = 1 / (96 / 25.4) / scaleFactor; // canvas px → mm
+
+  // 初始化圓形位置（置中，直徑 58mm）
+  const defaultRadiusPx = mmToCanvasPx(MM_DEFAULT / 2);
+  cropState.cx = w / 2;
+  cropState.cy = h / 2;
+  cropState.r  = Math.min(defaultRadiusPx, Math.min(w, h) / 2 - 4);
+
+  updateSvgOverlay();
+  syncSliderFromState();
   previewInfo.textContent = `${img.naturalWidth} × ${img.naturalHeight} px`;
 }
 
+// ─────────────────────────────────────────
+//  mm ↔ canvas px 換算
+// ─────────────────────────────────────────
+function mmToCanvasPx(mm) {
+  // 以 96dpi 為基準：1mm = 96/25.4 px，再乘預覽縮放比
+  if (!originalImage) return mm * 2;
+  const scaleFactor = previewCanvas.width / originalImage.naturalWidth;
+  return mm * (96 / 25.4) * scaleFactor;
+}
+
+function canvasPxToMm(px) {
+  if (!originalImage) return px / 2;
+  const scaleFactor = previewCanvas.width / originalImage.naturalWidth;
+  return px / ((96 / 25.4) * scaleFactor);
+}
+
+// ─────────────────────────────────────────
+//  SVG 圓形 overlay 更新
+// ─────────────────────────────────────────
+function updateSvgOverlay() {
+  if (!optCircle.checked || !originalImage) {
+    cropSvg.style.display = 'none';
+    return;
+  }
+
+  const { cx, cy, r } = cropState;
+  const W = previewCanvas.width;
+  const H = previewCanvas.height;
+
+  // SVG 尺寸同步 canvas
+  cropSvg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  cropSvg.style.display = 'block';
+
+  // 遮罩圓
+  maskCircle.setAttribute('cx', cx);
+  maskCircle.setAttribute('cy', cy);
+  maskCircle.setAttribute('r',  r);
+
+  // 暗色遮罩底
+  document.getElementById('dimRect').setAttribute('width',  W);
+  document.getElementById('dimRect').setAttribute('height', H);
+
+  // 裁切圓外框
+  cropCircleRing.setAttribute('cx', cx);
+  cropCircleRing.setAttribute('cy', cy);
+  cropCircleRing.setAttribute('r',  r);
+
+  // 拖曳把手（中心點）
+  dragHandle.setAttribute('cx', cx);
+  dragHandle.setAttribute('cy', cy);
+
+  // 縮放把手（右側）
+  resizeHandle.setAttribute('cx', cx + r);
+  resizeHandle.setAttribute('cy', cy);
+
+  // 尺寸標籤
+  const mmDiam = (canvasPxToMm(r) * 2).toFixed(0);
+  sizeLabel.setAttribute('x', cx);
+  sizeLabel.setAttribute('y', cy + r + 18);
+  sizeLabel.textContent = `⌀ ${mmDiam} mm`;
+}
+
+// ─────────────────────────────────────────
+//  滑桿同步
+// ─────────────────────────────────────────
+function syncSliderFromState() {
+  const mmDiam = Math.round(canvasPxToMm(cropState.r) * 2);
+  const clamped = Math.min(MM_MAX, Math.max(MM_MIN, mmDiam));
+  circleSizeSlider.value = clamped;
+  updateSliderUI(clamped);
+}
+
+function updateSliderUI(mm) {
+  sizeValueBadge.textContent = `${mm} mm`;
+  // 更新 CSS 自訂屬性讓軌道填色跟著走
+  circleSizeSlider.style.setProperty('--val', mm);
+  // 直接更新 background（Firefox 相容）
+  const pct = ((mm - MM_MIN) / (MM_MAX - MM_MIN) * 100).toFixed(1);
+  circleSizeSlider.style.background =
+    `linear-gradient(to right, var(--accent) ${pct}%, rgba(255,255,255,0.1) ${pct}%)`;
+}
+
+circleSizeSlider.addEventListener('input', () => {
+  const mm = parseInt(circleSizeSlider.value, 10);
+  updateSliderUI(mm);
+  // 更新 cropState 半徑，保持圓心不動
+  cropState.r = mmToCanvasPx(mm / 2);
+  clampCropState();
+  updateSvgOverlay();
+});
+
+// ─────────────────────────────────────────
+//  拖動圓框（移動位置）
+// ─────────────────────────────────────────
+let isDraggingMove   = false;
+let isDraggingResize = false;
+let dragStartX = 0, dragStartY = 0;
+let dragStartCx = 0, dragStartCy = 0;
+let dragStartR = 0;
+
+dragHandle.addEventListener('mousedown',  startMove);
+dragHandle.addEventListener('touchstart', startMove, { passive: false });
+
+resizeHandle.addEventListener('mousedown',  startResize);
+resizeHandle.addEventListener('touchstart', startResize, { passive: false });
+
+function startMove(e) {
+  e.preventDefault();
+  isDraggingMove = true;
+  const pos = getEventPos(e);
+  dragStartX  = pos.x;
+  dragStartY  = pos.y;
+  dragStartCx = cropState.cx;
+  dragStartCy = cropState.cy;
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup',   endDrag);
+  document.addEventListener('touchmove', onMove, { passive: false });
+  document.addEventListener('touchend',  endDrag);
+}
+
+function startResize(e) {
+  e.preventDefault();
+  isDraggingResize = true;
+  const pos = getEventPos(e);
+  dragStartX = pos.x;
+  dragStartR = cropState.r;
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup',   endDrag);
+  document.addEventListener('touchmove', onMove, { passive: false });
+  document.addEventListener('touchend',  endDrag);
+}
+
+function onMove(e) {
+  e.preventDefault();
+  const pos  = getEventPos(e);
+  const svgPt = clientToSvg(pos.x, pos.y);
+
+  if (isDraggingMove) {
+    const startSvgPt = clientToSvg(dragStartX, dragStartY);
+    cropState.cx = dragStartCx + (svgPt.x - startSvgPt.x);
+    cropState.cy = dragStartCy + (svgPt.y - startSvgPt.y);
+  }
+
+  if (isDraggingResize) {
+    // 計算新半徑 = 目前把手 X 與圓心距
+    const dx = svgPt.x - cropState.cx;
+    const newR = Math.abs(dx);
+    // mm 限制
+    const newMm = canvasPxToMm(newR) * 2;
+    if (newMm >= MM_MIN && newMm <= MM_MAX) {
+      cropState.r = newR;
+    } else if (newMm < MM_MIN) {
+      cropState.r = mmToCanvasPx(MM_MIN / 2);
+    } else {
+      cropState.r = mmToCanvasPx(MM_MAX / 2);
+    }
+    syncSliderFromState();
+  }
+
+  clampCropState();
+  updateSvgOverlay();
+}
+
+function endDrag() {
+  isDraggingMove   = false;
+  isDraggingResize = false;
+  document.removeEventListener('mousemove', onMove);
+  document.removeEventListener('mouseup',   endDrag);
+  document.removeEventListener('touchmove', onMove);
+  document.removeEventListener('touchend',  endDrag);
+  syncSliderFromState();
+}
+
+// client 座標 → SVG viewBox 座標
+function clientToSvg(clientX, clientY) {
+  const rect = cropSvg.getBoundingClientRect();
+  const W    = previewCanvas.width;
+  const H    = previewCanvas.height;
+  return {
+    x: (clientX - rect.left) / rect.width  * W,
+    y: (clientY - rect.top)  / rect.height * H,
+  };
+}
+
+function getEventPos(e) {
+  if (e.touches && e.touches.length > 0) {
+    return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+  }
+  return { x: e.clientX, y: e.clientY };
+}
+
+// 確保圓形不超出 canvas 邊界
+function clampCropState() {
+  const W = previewCanvas.width;
+  const H = previewCanvas.height;
+  const r = cropState.r;
+  cropState.cx = Math.min(W - r, Math.max(r, cropState.cx));
+  cropState.cy = Math.min(H - r, Math.max(r, cropState.cy));
+}
+
+// ─────────────────────────────────────────
+//  option 切換
+// ─────────────────────────────────────────
+optWatermark.addEventListener('change', () => {
+  if (originalImage) drawPreview(originalImage);
+});
+
+optCircle.addEventListener('change', () => {
+  const on = optCircle.checked;
+  circleSizeControl.style.display = on ? 'block' : 'none';
+  if (on && originalImage) {
+    updateSvgOverlay();
+    updateSliderUI(parseInt(circleSizeSlider.value, 10));
+  } else {
+    cropSvg.style.display = 'none';
+  }
+});
+
+// ─────────────────────────────────────────
+//  浮水印標記（紅框）
+// ─────────────────────────────────────────
 function drawWatermarkMarker(ctx, w, h) {
-  // Gemini 浮水印通常在右下角約 12% 寬、6% 高的區域
   const mw = Math.round(w * 0.14);
   const mh = Math.round(h * 0.08);
   const mx = w - mw - 4;
@@ -111,10 +374,8 @@ function drawWatermarkMarker(ctx, w, h) {
   ctx.lineWidth = 2;
   ctx.setLineDash([5, 3]);
   ctx.strokeRect(mx, my, mw, mh);
-
   ctx.fillStyle = 'rgba(255,77,109,0.15)';
   ctx.fillRect(mx, my, mw, mh);
-
   ctx.setLineDash([]);
   ctx.font = `bold ${Math.max(10, Math.round(w * 0.02))}px Syne, sans-serif`;
   ctx.fillStyle = 'rgba(255,77,109,0.9)';
@@ -123,24 +384,9 @@ function drawWatermarkMarker(ctx, w, h) {
   ctx.restore();
 }
 
-// ── Circle overlay on preview ──
-function updateCircleOverlay() {
-  if (optCircle.checked) {
-    circleOverlay.classList.add('visible');
-  } else {
-    circleOverlay.classList.remove('visible');
-  }
-}
-
-// Sync option toggles → preview refresh
-optWatermark.addEventListener('change', () => {
-  if (originalImage) drawPreview(originalImage);
-});
-optCircle.addEventListener('change', () => {
-  updateCircleOverlay();
-});
-
-// ── Process ──
+// ─────────────────────────────────────────
+//  開始處理
+// ─────────────────────────────────────────
 btnProcess.addEventListener('click', async () => {
   if (!originalImage) return;
 
@@ -156,39 +402,28 @@ btnProcess.addEventListener('click', async () => {
   clearLog();
 
   try {
-    let canvas;
+    let canvas = document.createElement('canvas');
+    const img = originalImage;
+    canvas.width  = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0);
 
-    if (doWatermark && GAS_URL) {
-      // 後端 GAS 處理浮水印
-      log('🌐 傳送至 GAS 後端去除浮水印…');
-      const b64 = await fileToBase64(originalFile);
-      const resultB64 = await sendToGAS(b64, originalFile.type, doCircle);
-      resultDataURL = resultB64;
-      log('✅ 浮水印去除完成（後端）');
-    } else {
-      // 純前端處理
-      canvas = document.createElement('canvas');
-      const img = originalImage;
-      canvas.width  = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0);
-
-      if (doWatermark) {
-        log('🎨 正在去除 Gemini 浮水印…');
-        removeWatermarkCanvas(ctx, canvas.width, canvas.height);
-        log('✅ 浮水印區域已修復');
-      }
-
-      if (doCircle) {
-        log('⭕ 正在裁切圓形…');
-        canvas = cropCircle(canvas);
-        log('✅ 圓形裁切完成');
-      }
-
-      resultDataURL = canvas.toDataURL(doCircle ? 'image/png' : 'image/jpeg', 0.95);
+    if (doWatermark) {
+      log('🎨 正在去除 Gemini 浮水印…');
+      removeWatermarkCanvas(ctx, canvas.width, canvas.height);
+      log('✅ 浮水印區域已修復');
     }
 
+    if (doCircle) {
+      log('⭕ 正在裁切圓形…');
+      const mmDiam = parseFloat((canvasPxToMm(cropState.r) * 2).toFixed(1));
+      log(`   直徑：${mmDiam} mm，位置：(${Math.round(canvasPxToMm(cropState.cx))}mm, ${Math.round(canvasPxToMm(cropState.cy))}mm)`);
+      canvas = cropCircleWithState(canvas);
+      log('✅ 圓形裁切完成');
+    }
+
+    resultDataURL = canvas.toDataURL(doCircle ? 'image/png' : 'image/jpeg', 0.95);
     resultImg.src = resultDataURL;
     stepResult.classList.remove('hidden');
     stepResult.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -202,52 +437,83 @@ btnProcess.addEventListener('click', async () => {
   }
 });
 
-// ── Gemini Watermark Removal (Canvas inpainting) ──
-/**
- * Gemini 浮水印去除邏輯：
- *  - 偵測右下角區域（約佔圖片 14% × 8%）
- *  - 分析浮水印區域邊界的平均像素色彩
- *  - 使用 patch-based 填充：從周圍取樣相似區塊進行填補
- *  - 搭配線性漸層融合使邊緣自然過渡
- */
+// ─────────────────────────────────────────
+//  圓形裁切（依 cropState 位置與大小）
+// ─────────────────────────────────────────
+function cropCircleWithState(srcCanvas) {
+  const scaleX = srcCanvas.width  / previewCanvas.width;
+  const scaleY = srcCanvas.height / previewCanvas.height;
+
+  // 換算到原始圖片座標
+  const cx = cropState.cx * scaleX;
+  const cy = cropState.cy * scaleY;
+  const r  = cropState.r  * Math.min(scaleX, scaleY);
+  const diameter = Math.round(r * 2);
+
+  const out = document.createElement('canvas');
+  out.width  = diameter;
+  out.height = diameter;
+  const ctx = out.getContext('2d');
+
+  ctx.beginPath();
+  ctx.arc(r, r, r, 0, Math.PI * 2);
+  ctx.clip();
+
+  // 從原圖對應區域畫入
+  ctx.drawImage(
+    srcCanvas,
+    cx - r, cy - r, diameter, diameter, // 來源區域
+    0, 0, diameter, diameter             // 目標區域
+  );
+
+  return out;
+}
+
+// 相容舊的 cropCircle（全圖置中裁切）
+function cropCircle(srcCanvas) {
+  const size = Math.min(srcCanvas.width, srcCanvas.height);
+  const out  = document.createElement('canvas');
+  out.width  = size;
+  out.height = size;
+  const ctx  = out.getContext('2d');
+  const ox = (srcCanvas.width  - size) / 2;
+  const oy = (srcCanvas.height - size) / 2;
+  ctx.beginPath();
+  ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
+  ctx.clip();
+  ctx.drawImage(srcCanvas, -ox, -oy, srcCanvas.width, srcCanvas.height);
+  return out;
+}
+
+// ─────────────────────────────────────────
+//  浮水印去除（Canvas inpainting）
+// ─────────────────────────────────────────
 function removeWatermarkCanvas(ctx, W, H) {
-  // 1. 定義浮水印區域（Gemini 右下角帶狀區）
-  const pw = Math.round(W * 0.14);  // 浮水印寬度
-  const ph = Math.round(H * 0.08);  // 浮水印高度
-  const px = W - pw;                // 起始 X
-  const py = H - ph;                // 起始 Y
+  const pw = Math.round(W * 0.14);
+  const ph = Math.round(H * 0.08);
+  const px = W - pw;
+  const py = H - ph;
 
   const imageData = ctx.getImageData(0, 0, W, H);
   const data = imageData.data;
-
-  // 2. 取浮水印正上方的區域作為填充來源
-  const sourceY = py - ph; // 從上方一個 ph 的距離取樣
+  const sourceY = py - ph;
 
   if (sourceY < 0) {
-    // 若圖片太小，改用平均色填充
     fillWithAvgColor(data, W, px, py, pw, ph);
   } else {
-    // 3. 垂直 tile 複製（帶 Gaussian blur 柔化）
     for (let y = py; y < py + ph; y++) {
       for (let x = px; x < px + pw; x++) {
-        // 取對應的上方像素（帶隨機偏移以避免明顯重複紋理）
         const offsetX = Math.round((Math.random() - 0.5) * 4);
         const srcX = Math.min(W - 1, Math.max(0, x + offsetX));
         const srcY = Math.min(H - 1, Math.max(0, sourceY + (y - py)));
-
         const si = (srcY * W + srcX) * 4;
         const di = (y   * W + x)    * 4;
-
-        // 融合比例：越靠近浮水印底部越多覆蓋（漸進過渡）
-        const blendT = (y - py) / ph; // 0 → 1
-
-        data[di]     = data[di]     * (1 - blendT * 0.3) + data[si]     * (blendT * 0.3 + 0.7);
-        data[di + 1] = data[di + 1] * (1 - blendT * 0.3) + data[si + 1] * (blendT * 0.3 + 0.7);
-        data[di + 2] = data[di + 2] * (1 - blendT * 0.3) + data[si + 2] * (blendT * 0.3 + 0.7);
+        const blendT = (y - py) / ph;
+        data[di]   = data[di]   * (1 - blendT * 0.3) + data[si]   * (blendT * 0.3 + 0.7);
+        data[di+1] = data[di+1] * (1 - blendT * 0.3) + data[si+1] * (blendT * 0.3 + 0.7);
+        data[di+2] = data[di+2] * (1 - blendT * 0.3) + data[si+2] * (blendT * 0.3 + 0.7);
       }
     }
-
-    // 4. 對修復區域做快速 box blur 柔化邊緣
     boxBlurRegion(data, W, H, px - 2, py - 2, pw + 4, ph + 4, 3);
   }
 
@@ -255,7 +521,6 @@ function removeWatermarkCanvas(ctx, W, H) {
 }
 
 function fillWithAvgColor(data, W, px, py, pw, ph) {
-  // 取周圍 8px 邊框的平均色
   let r = 0, g = 0, b = 0, count = 0;
   const sample = (x, y) => {
     if (x < 0 || x >= W || y < 0) return;
@@ -265,7 +530,6 @@ function fillWithAvgColor(data, W, px, py, pw, ph) {
   for (let x = px; x < px + pw; x++) sample(x, py - 1);
   for (let y = py; y < py + ph; y++) sample(px - 1, y);
   if (count > 0) { r /= count; g /= count; b /= count; }
-
   for (let y = py; y < py + ph; y++) {
     for (let x = px; x < px + pw; x++) {
       const i = (y * W + x) * 4;
@@ -280,7 +544,6 @@ function boxBlurRegion(data, W, H, x0, y0, bw, bh, radius) {
   const y1 = Math.min(H, y0 + bh);
   const temp = new Uint8ClampedArray(data.length);
   temp.set(data);
-
   for (let y = y0; y < y1; y++) {
     for (let x = x0; x < x1; x++) {
       let r = 0, g = 0, b = 0, cnt = 0;
@@ -293,74 +556,39 @@ function boxBlurRegion(data, W, H, x0, y0, bw, bh, radius) {
         }
       }
       const di = (y * W + x) * 4;
-      data[di]   = r / cnt;
-      data[di+1] = g / cnt;
-      data[di+2] = b / cnt;
+      data[di] = r/cnt; data[di+1] = g/cnt; data[di+2] = b/cnt;
     }
   }
 }
 
-// ── Circle Crop ──
-function cropCircle(srcCanvas) {
-  const size = Math.min(srcCanvas.width, srcCanvas.height);
-  const out  = document.createElement('canvas');
-  out.width  = size;
-  out.height = size;
-  const ctx  = out.getContext('2d');
-
-  const ox = (srcCanvas.width  - size) / 2;
-  const oy = (srcCanvas.height - size) / 2;
-
-  ctx.beginPath();
-  ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
-  ctx.clip();
-  ctx.drawImage(srcCanvas, -ox, -oy, srcCanvas.width, srcCanvas.height);
-
-  return out;
-}
-
-// ── GAS Backend (optional) ──
-async function sendToGAS(base64Data, mimeType, doCircle) {
-  const resp = await fetch(GAS_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      image: base64Data,
-      mimeType,
-      removeWatermark: true,
-      cropCircle: doCircle
-    })
-  });
-  if (!resp.ok) throw new Error(`GAS 回應錯誤：${resp.status}`);
-  const json = await resp.json();
-  if (json.error) throw new Error(json.error);
-  return json.result; // base64 data URL
-}
-
-// ── Download ──
+// ─────────────────────────────────────────
+//  下載 / 重置
+// ─────────────────────────────────────────
 btnDownload.addEventListener('click', () => {
   if (!resultDataURL) return;
   const a = document.createElement('a');
-  const isCircle = optCircle.checked;
-  a.download = `processed_${Date.now()}${isCircle ? '.png' : '.jpg'}`;
+  a.download = `circlecrop_${Date.now()}${optCircle.checked ? '.png' : '.jpg'}`;
   a.href = resultDataURL;
   a.click();
   log('💾 圖片已下載');
 });
 
-// ── Reset ──
 btnReset.addEventListener('click', () => {
   originalFile  = null;
   originalImage = null;
   resultDataURL = '';
   fileInput.value = '';
+  cropSvg.style.display = 'none';
+  circleSizeControl.style.display = 'none';
   stepOptions.classList.add('hidden');
   stepResult.classList.add('hidden');
   clearLog();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 });
 
-// ── Helpers ──
+// ─────────────────────────────────────────
+//  Helpers
+// ─────────────────────────────────────────
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -386,24 +614,25 @@ function log(msg, isError = false) {
   statusLog.appendChild(line);
 }
 
-function clearLog() {
-  statusLog.innerHTML = '';
-}
+function clearLog() { statusLog.innerHTML = ''; }
 
 function showError(msg) {
   const prev = document.querySelector('.toast-error');
   if (prev) prev.remove();
-
   const toast = document.createElement('div');
   toast.className = 'toast-error';
   toast.style.cssText = `
     position:fixed; bottom:32px; left:50%; transform:translateX(-50%);
     background:#ff4d6d; color:#fff; padding:12px 24px; border-radius:100px;
     font-family:var(--font-display); font-size:14px; z-index:200;
-    box-shadow:0 8px 24px rgba(255,77,109,0.4);
-    animation: fadeUp .3s ease;
+    box-shadow:0 8px 24px rgba(255,77,109,0.4); animation:fadeUp .3s ease;
   `;
   toast.textContent = msg;
   document.body.appendChild(toast);
   setTimeout(() => toast.remove(), 3500);
 }
+
+// ─────────────────────────────────────────
+//  初始化滑桿 UI
+// ─────────────────────────────────────────
+updateSliderUI(MM_DEFAULT);
