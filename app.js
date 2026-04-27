@@ -55,10 +55,11 @@ const cropState = {
   mmPerPx: 1, // mm ÷ canvas px 比例（依圖片解析度計算）
 };
 
-// mm 邊界（對應 slider）
-const MM_MIN = 42;
-const MM_MAX = 72;
-const MM_DEFAULT = 58;
+// 圓形直徑邊界（以原始圖片像素為單位）
+// 滑桿顯示單位：px（420–720px，預設 580px）
+const PX_MIN = 420;
+const PX_MAX = 720;
+const PX_DEFAULT = 580;
 
 // ─────────────────────────────────────────
 //  Drag & Drop 上傳
@@ -132,10 +133,11 @@ function drawPreview(img) {
   cropState.mmPerPx = 1 / (96 / 25.4) / scaleFactor; // canvas px → mm
 
   // 初始化圓形位置（置中，直徑 58mm）
-  const defaultRadiusPx = mmToCanvasPx(MM_DEFAULT / 2);
+  // 預設圓形半徑：以原始圖片像素換算到 canvas 尺寸
+  const defaultRadiusCanvas = origToCanvasPx(PX_DEFAULT / 2);
   cropState.cx = w / 2;
   cropState.cy = h / 2;
-  cropState.r  = Math.min(defaultRadiusPx, Math.min(w, h) / 2 - 4);
+  cropState.r  = Math.min(defaultRadiusCanvas, Math.min(w, h) / 2 - 4);
 
   updateSvgOverlay();
   syncSliderFromState();
@@ -143,20 +145,22 @@ function drawPreview(img) {
 }
 
 // ─────────────────────────────────────────
-//  mm ↔ canvas px 換算
+//  原始圖片 px ↔ canvas preview px 換算
 // ─────────────────────────────────────────
-function mmToCanvasPx(mm) {
-  // 以 96dpi 為基準：1mm = 96/25.4 px，再乘預覽縮放比
-  if (!originalImage) return mm * 2;
-  const scaleFactor = previewCanvas.width / originalImage.naturalWidth;
-  return mm * (96 / 25.4) * scaleFactor;
+// origPx：原始圖片像素  |  canvasPx：預覽 canvas 像素
+function origToCanvasPx(origPx) {
+  if (!originalImage || originalImage.naturalWidth === 0) return origPx;
+  return origPx * (previewCanvas.width / originalImage.naturalWidth);
 }
 
-function canvasPxToMm(px) {
-  if (!originalImage) return px / 2;
-  const scaleFactor = previewCanvas.width / originalImage.naturalWidth;
-  return px / ((96 / 25.4) * scaleFactor);
+function canvasToOrigPx(canvasPx) {
+  if (!originalImage || previewCanvas.width === 0) return canvasPx;
+  return canvasPx * (originalImage.naturalWidth / previewCanvas.width);
 }
+
+// 向下相容（部分地方還呼叫舊名）
+function mmToCanvasPx(mm) { return origToCanvasPx(mm); }
+function canvasPxToMm(px)  { return canvasToOrigPx(px); }
 
 // ─────────────────────────────────────────
 //  SVG 圓形 overlay 更新
@@ -198,37 +202,35 @@ function updateSvgOverlay() {
   resizeHandle.setAttribute('cy', cy);
 
   // 尺寸標籤
-  const mmDiam = (canvasPxToMm(r) * 2).toFixed(0);
+  const origDiam = Math.round(canvasToOrigPx(r) * 2);
   sizeLabel.setAttribute('x', cx);
   sizeLabel.setAttribute('y', cy + r + 18);
-  sizeLabel.textContent = `⌀ ${mmDiam} mm`;
+  sizeLabel.textContent = `⌀ ${origDiam} px`;
 }
 
 // ─────────────────────────────────────────
 //  滑桿同步
 // ─────────────────────────────────────────
 function syncSliderFromState() {
-  const mmDiam = Math.round(canvasPxToMm(cropState.r) * 2);
-  const clamped = Math.min(MM_MAX, Math.max(MM_MIN, mmDiam));
+  const origDiam = Math.round(canvasToOrigPx(cropState.r) * 2);
+  const clamped  = Math.min(PX_MAX, Math.max(PX_MIN, origDiam));
   circleSizeSlider.value = clamped;
   updateSliderUI(clamped);
 }
 
-function updateSliderUI(mm) {
-  sizeValueBadge.textContent = `${mm} mm`;
-  // 更新 CSS 自訂屬性讓軌道填色跟著走
-  circleSizeSlider.style.setProperty('--val', mm);
-  // 直接更新 background（Firefox 相容）
-  const pct = ((mm - MM_MIN) / (MM_MAX - MM_MIN) * 100).toFixed(1);
+function updateSliderUI(px) {
+  sizeValueBadge.textContent = `${px} px`;
+  circleSizeSlider.style.setProperty('--val', px);
+  const pct = ((px - PX_MIN) / (PX_MAX - PX_MIN) * 100).toFixed(1);
   circleSizeSlider.style.background =
     `linear-gradient(to right, var(--accent) ${pct}%, rgba(255,255,255,0.1) ${pct}%)`;
 }
 
 circleSizeSlider.addEventListener('input', () => {
-  const mm = parseInt(circleSizeSlider.value, 10);
-  updateSliderUI(mm);
-  // 更新 cropState 半徑，保持圓心不動
-  cropState.r = mmToCanvasPx(mm / 2);
+  const px = parseInt(circleSizeSlider.value, 10);
+  updateSliderUI(px);
+  // 半徑 = 原始圖片 px 換算到 canvas 尺寸
+  cropState.r = origToCanvasPx(px / 2);
   clampCropState();
   updateSvgOverlay();
 });
@@ -290,13 +292,13 @@ function onMove(e) {
     const dx = svgPt.x - cropState.cx;
     const newR = Math.abs(dx);
     // mm 限制
-    const newMm = canvasPxToMm(newR) * 2;
-    if (newMm >= MM_MIN && newMm <= MM_MAX) {
+    const newOrigPx = canvasToOrigPx(newR) * 2;
+    if (newOrigPx >= PX_MIN && newOrigPx <= PX_MAX) {
       cropState.r = newR;
-    } else if (newMm < MM_MIN) {
-      cropState.r = mmToCanvasPx(MM_MIN / 2);
+    } else if (newOrigPx < PX_MIN) {
+      cropState.r = origToCanvasPx(PX_MIN / 2);
     } else {
-      cropState.r = mmToCanvasPx(MM_MAX / 2);
+      cropState.r = origToCanvasPx(PX_MAX / 2);
     }
     syncSliderFromState();
   }
@@ -417,8 +419,10 @@ btnProcess.addEventListener('click', async () => {
 
     if (doCircle) {
       log('⭕ 正在裁切圓形…');
-      const mmDiam = parseFloat((canvasPxToMm(cropState.r) * 2).toFixed(1));
-      log(`   直徑：${mmDiam} mm，位置：(${Math.round(canvasPxToMm(cropState.cx))}mm, ${Math.round(canvasPxToMm(cropState.cy))}mm)`);
+      const origDiam = Math.round(canvasToOrigPx(cropState.r) * 2);
+      const origCx   = Math.round(canvasToOrigPx(cropState.cx));
+      const origCy   = Math.round(canvasToOrigPx(cropState.cy));
+      log(`   直徑：${origDiam} px，圓心：(${origCx}px, ${origCy}px)`);
       canvas = cropCircleWithState(canvas);
       log('✅ 圓形裁切完成');
     }
@@ -635,4 +639,4 @@ function showError(msg) {
 // ─────────────────────────────────────────
 //  初始化滑桿 UI
 // ─────────────────────────────────────────
-updateSliderUI(MM_DEFAULT);
+updateSliderUI(PX_DEFAULT);
