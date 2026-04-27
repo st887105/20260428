@@ -283,7 +283,128 @@ main {
   color: #000;
 }
 
-/* ── Preview Area ── */
+/* ── Circle Size Control ── */
+.circle-size-control {
+  width: 100%;
+  max-width: 480px;
+  padding: 16px 20px 12px;
+  background: var(--surface2);
+  border: 1.5px solid rgba(0,229,200,0.2);
+  border-radius: var(--radius-sm);
+  margin-top: 16px;
+  animation: fadeUp 0.3s ease both;
+}
+
+.size-control-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.size-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  font-family: var(--font-display);
+  letter-spacing: 0.03em;
+}
+
+.size-value-badge {
+  background: rgba(0,229,200,0.12);
+  color: var(--accent);
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 800;
+  padding: 3px 14px;
+  border-radius: 100px;
+  border: 1px solid rgba(0,229,200,0.25);
+  min-width: 72px;
+  text-align: center;
+  transition: var(--transition);
+}
+
+.slider-track-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.slider-endpoint {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  font-family: var(--font-display);
+  min-width: 36px;
+}
+.slider-endpoint:last-child { text-align: right; }
+
+/* Custom range slider */
+.circle-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1;
+  height: 4px;
+  border-radius: 100px;
+  background: linear-gradient(
+    to right,
+    var(--accent) 0%,
+    var(--accent) calc((var(--val, 58) - 42) / 30 * 100%),
+    rgba(255,255,255,0.1) calc((var(--val, 58) - 42) / 30 * 100%),
+    rgba(255,255,255,0.1) 100%
+  );
+  outline: none;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.circle-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 3px solid var(--bg);
+  box-shadow: 0 0 0 2px var(--accent);
+  cursor: pointer;
+  transition: box-shadow var(--transition), transform var(--transition);
+}
+
+.circle-slider::-webkit-slider-thumb:hover,
+.circle-slider:active::-webkit-slider-thumb {
+  box-shadow: 0 0 0 5px rgba(0,229,200,0.25);
+  transform: scale(1.15);
+}
+
+.circle-slider::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 3px solid var(--bg);
+  box-shadow: 0 0 0 2px var(--accent);
+  cursor: pointer;
+}
+
+.size-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 10px;
+  line-height: 1.5;
+}
+
+/* ── Preview canvas wrapper must be position:relative ── */
+.preview-canvas-wrapper {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+}
+
+/* Remove old circle overlay */
+.preview-circle-overlay { display: none !important; }
 .preview-area {
   background: var(--surface);
   border: 1.5px solid var(--border);
