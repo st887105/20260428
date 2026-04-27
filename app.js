@@ -55,11 +55,11 @@ const cropState = {
   mmPerPx: 1, // mm ÷ canvas px 比例（依圖片解析度計算）
 };
 
-// 圓形直徑邊界（以原始圖片像素為單位）
-// 滑桿顯示單位：px（420–720px，預設 580px）
-const PX_MIN = 420;
-const PX_MAX = 720;
-const PX_DEFAULT = 580;
+// 圓形直徑邊界（動態，依圖片尺寸計算）
+// PX_MIN: 最小直徑（像素）  PX_MAX / PX_DEFAULT: 開圖後動態設定
+const PX_MIN = 100; // 最小 100px 防止過小
+let   PX_MAX     = 2048;
+let   PX_DEFAULT = 2048; // 開圖後會重算為圖片短邊
 
 // ─────────────────────────────────────────
 //  Drag & Drop 上傳
@@ -125,19 +125,21 @@ function drawPreview(img) {
 
   if (optWatermark.checked) drawWatermarkMarker(ctx, w, h);
 
-  // 計算 mm → canvas px 比例
-  // 假設螢幕 96dpi、1inch=25.4mm → 1px=0.2646mm
-  // 但使用者說的 mm 是輸出尺寸（印刷），以原始圖片尺寸對應
-  // 此處直接以預覽 canvas 的比例呈現，實際輸出再等比換算
-  const scaleFactor = w / img.naturalWidth; // preview 縮放比
-  cropState.mmPerPx = 1 / (96 / 25.4) / scaleFactor; // canvas px → mm
+  // 動態計算最大圓形直徑 = 圖片短邊（原始像素）
+  const imgShortSide = Math.min(img.naturalWidth, img.naturalHeight);
+  PX_MAX     = imgShortSide;          // 最大就是圖片短邊
+  PX_DEFAULT = imgShortSide;          // 預設填滿最大內切圓
 
-  // 初始化圓形位置（置中，直徑 58mm）
-  // 預設圓形半徑：以原始圖片像素換算到 canvas 尺寸
-  const defaultRadiusCanvas = origToCanvasPx(PX_DEFAULT / 2);
+  // 更新 slider 範圍（min 固定 100，max 動態）
+  circleSizeSlider.min   = PX_MIN;
+  circleSizeSlider.max   = PX_MAX;
+  circleSizeSlider.value = PX_DEFAULT;
+  circleSizeSlider.step  = Math.max(1, Math.round(imgShortSide / 200)); // 步進自動縮放
+
+  // 初始化圓形：最大內切圓，置中
   cropState.cx = w / 2;
   cropState.cy = h / 2;
-  cropState.r  = Math.min(defaultRadiusCanvas, Math.min(w, h) / 2 - 4);
+  cropState.r  = Math.min(w, h) / 2 - 1; // 緊貼邊界，留 1px 防止裁切超出
 
   updateSvgOverlay();
   syncSliderFromState();
@@ -213,7 +215,9 @@ function updateSvgOverlay() {
 // ─────────────────────────────────────────
 function syncSliderFromState() {
   const origDiam = Math.round(canvasToOrigPx(cropState.r) * 2);
-  const clamped  = Math.min(PX_MAX, Math.max(PX_MIN, origDiam));
+  // max 動態跟著圖片短邊
+  const dynamicMax = parseInt(circleSizeSlider.max, 10) || PX_MAX;
+  const clamped = Math.min(dynamicMax, Math.max(PX_MIN, origDiam));
   circleSizeSlider.value = clamped;
   updateSliderUI(clamped);
 }
@@ -221,16 +225,24 @@ function syncSliderFromState() {
 function updateSliderUI(px) {
   sizeValueBadge.textContent = `${px} px`;
   circleSizeSlider.style.setProperty('--val', px);
-  const pct = ((px - PX_MIN) / (PX_MAX - PX_MIN) * 100).toFixed(1);
+  const dynMax = parseInt(circleSizeSlider.max, 10) || PX_MAX;
+  const pct = Math.min(100, ((px - PX_MIN) / (dynMax - PX_MIN) * 100)).toFixed(1);
   circleSizeSlider.style.background =
     `linear-gradient(to right, var(--accent) ${pct}%, rgba(255,255,255,0.1) ${pct}%)`;
+  // 動態更新端點標籤
+  const endLabels = document.querySelectorAll('.slider-endpoint');
+  if (endLabels.length >= 2) {
+    endLabels[0].textContent = PX_MIN + 'px';
+    endLabels[1].textContent = dynMax + 'px';
+  }
 }
 
 circleSizeSlider.addEventListener('input', () => {
   const px = parseInt(circleSizeSlider.value, 10);
   updateSliderUI(px);
-  // 半徑 = 原始圖片 px 換算到 canvas 尺寸
-  cropState.r = origToCanvasPx(px / 2);
+  // 半徑 = 原始圖片 px → canvas px，不超過 canvas 短邊一半
+  const maxR = Math.min(previewCanvas.width, previewCanvas.height) / 2 - 1;
+  cropState.r = Math.min(origToCanvasPx(px / 2), maxR);
   clampCropState();
   updateSvgOverlay();
 });
@@ -292,13 +304,14 @@ function onMove(e) {
     const dx = svgPt.x - cropState.cx;
     const newR = Math.abs(dx);
     // mm 限制
-    const newOrigPx = canvasToOrigPx(newR) * 2;
-    if (newOrigPx >= PX_MIN && newOrigPx <= PX_MAX) {
+    const maxCanvasR = Math.min(previewCanvas.width, previewCanvas.height) / 2 - 1;
+    const minCanvasR = origToCanvasPx(PX_MIN / 2);
+    if (newR >= minCanvasR && newR <= maxCanvasR) {
       cropState.r = newR;
-    } else if (newOrigPx < PX_MIN) {
-      cropState.r = origToCanvasPx(PX_MIN / 2);
+    } else if (newR < minCanvasR) {
+      cropState.r = minCanvasR;
     } else {
-      cropState.r = origToCanvasPx(PX_MAX / 2);
+      cropState.r = maxCanvasR;
     }
     syncSliderFromState();
   }
